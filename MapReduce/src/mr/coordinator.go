@@ -30,15 +30,20 @@ type Task struct {
 	AssignedAt time.Time
 	Status     TaskStatus
 }
+type ReduceTask struct {
+	Status     TaskStatus
+	AssignedAt time.Time
+}
 type Coordinator struct {
 	// Your definitions here.
-	NReduce     int
-	MapTask     []Task
-	ReduceTask  []TaskStatus
-	Mapassigned int
-	MapDone     int
-	ReduceDone  int
-	mutex       sync.Mutex
+	NReduce        int
+	MapTask        []Task
+	ReduceTask     []ReduceTask
+	Mapassigned    int
+	Reduceassigned int
+	MapDone        int
+	ReduceDone     int
+	mutex          sync.Mutex
 }
 
 // Your code here -- RPC handlers for the worker to call.
@@ -61,28 +66,41 @@ func (c *Coordinator) AssignTask(args *Args, reply *Reply) error {
 			c.Mapassigned++
 			break
 		}
-		if task.Status == MapFailed || (task.Status == MapAssigned && time.Since(task.AssignedAt) >= 10*time.Second) {
+		if task.Status == MapAssigned && time.Since(task.AssignedAt) >= 10*time.Second {
 			task.Status = UnAssigned
 			c.MapTask[index] = task
+			c.Mapassigned--
 			break
 		}
 		if c.Mapassigned == len(c.MapTask) && len(c.MapTask) != c.MapDone {
 			reply.Status = Wait
-			break
 		}
-
 	}
 
 	//Start Reduce
 	if len(c.MapTask) == c.MapDone {
 		for index, task := range c.ReduceTask {
-			if task != ReduceAssigned && task != ReduceDone {
-				task = ReduceAssigned
+			if task.Status != ReduceAssigned && task.Status != ReduceDone {
+				task.Status = ReduceAssigned
+				task.AssignedAt = time.Now()
 				reply.Index = index
 				reply.Status = ReduceAssigned
 				reply.NReduce = c.NReduce
 				reply.TaskLength = len(c.MapTask)
+				c.ReduceTask[index] = task
+				c.Reduceassigned++
+				// fmt.Printf("Reduce Tasks:%v", c.ReduceTask)
 				break
+			}
+			if task.Status == ReduceAssigned && time.Since(task.AssignedAt) >= 10*time.Second {
+				task.Status = UnAssigned
+				c.ReduceTask[index] = task
+				c.Reduceassigned--
+				break
+			}
+			if c.Reduceassigned == c.NReduce && c.ReduceDone != c.NReduce {
+				reply.Status = Wait
+
 			}
 			if c.NReduce == c.ReduceDone {
 				reply.Status = Done
@@ -107,7 +125,8 @@ func (c *Coordinator) TaskDone(taskdone *Args, reply *Reply) error {
 		}
 	}
 	if taskdone.Status == ReduceDone {
-		c.ReduceTask[taskdone.Index] = ReduceDone
+		c.ReduceTask[taskdone.Index].Status = ReduceDone
+		c.ReduceDone++
 	}
 	return nil
 }
@@ -134,11 +153,9 @@ func (c *Coordinator) server() {
 // if the entire job has finished.
 func (c *Coordinator) Done() bool {
 	ret := false
-
-	// Your code here.
-	// if c.ReduceDone == c.NReduce {
-	// 	ret = true
-	// }
+	if c.ReduceDone == c.NReduce {
+		ret = true
+	}
 	return ret
 }
 
@@ -160,7 +177,7 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	}
 	c.MapTask = filemap
 	c.NReduce = nReduce
-	c.ReduceTask = make([]TaskStatus, nReduce)
+	c.ReduceTask = make([]ReduceTask, nReduce)
 	c.server()
 
 	return &c
